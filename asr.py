@@ -112,3 +112,23 @@ class ASREngine:
         ]
         out = {"text": text, "segments": segments, "lang": language}
         return out
+
+
+if __name__ == "__main__":
+    import pprint
+
+    config = {
+        "encoder": "sherpa-onnx-transducer-2024-06-27-utc-16k-encoder.onnx",
+        "decoder": "sherpa-onnx-transducer-2024-06-27-utc-16k-decoder.onnx",
+        "joiner": "sherpa-onnx-transducer-2024-06-27-utc-16k-joiner.onnx",
+        "tokens": "sherpa-onnx-transducer-2024-06-27-utc-16k-tokens.txt",
+        "provider": "cpu",
+        "num_threads": 4,
+        "sample_rate": 16000,
+        "debug": False,
+    }
+
+    engine = ASREngine(config)
+    audio_file = "test_wavs/0.wav"  # Replace with your audio file path
+    result = engine.transcribe(audio_file)
+    pprint.pprint(result)

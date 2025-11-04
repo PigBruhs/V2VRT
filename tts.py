@@ -70,3 +70,22 @@ class TTSEngine:
         out_path = os.path.join(self._out_dir, f"tts_{uuid.uuid4().hex}.wav")
         sf.write(out_path, wav, self._sr)
         return out_path
+
+
+if __name__ == "__main__":
+    # Simple test
+    config = {
+        "model_name": "tts_models/multilingual/multi-dataset/xtts_v2",
+        "output_dir": "outputs",
+        "sample_rate": 22050,
+        "use_gpu": False,
+    }
+    tts_engine = TTSEngine(config)
+    text = "Hello, this is a test of the text to speech synthesis."
+    out_wav = tts_engine.synthesize(
+        text=text,
+        language="en",
+        voice=None,
+        speed=1.0,
+    )
+    print(f"Synthesized speech saved to: {out_wav}")

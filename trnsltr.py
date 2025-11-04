@@ -81,3 +81,15 @@ class Translator:
         hyp_ids = self._tokenizer.convert_tokens_to_ids(hyp_tokens)
         out_text = self._tokenizer.decode(hyp_ids, skip_special_tokens=True)
         return out_text
+
+
+
+if __name__ == "__main__":
+    # Example usage
+    config = {
+        "ct2_model_path": "/path/to/ctranslate2/m2m100_418M_int8",
+    }
+    translator = Translator(config)
+    src_text = "Hello, how are you?"
+    translated_text = translator.translate(src_text, src_lang="en", tgt_lang="fr")
+    print(translated_text)  # Should print the French translation of the input text

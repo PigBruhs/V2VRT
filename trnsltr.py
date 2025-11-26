@@ -87,7 +87,7 @@ class Translator:
 if __name__ == "__main__":
     # Example usage
     config = {
-        "ct2_model_path": "/path/to/ctranslate2/m2m100_418M_int8",
+        "ct2_model_path": "./models/nlp/m2m100_418M_int8",
     }
     translator = Translator(config)
     src_text = "Hello, how are you?"

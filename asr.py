@@ -1,134 +1,180 @@
-from __future__ import annotations
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class ASRConfig:
+    model_name_or_path: str = "small"        # 模型名或本地路径（例如: small, tiny, medium 等）
+    device: Optional[str] = None             # "cuda" 或 "cpu"，None 表示自动检测
+    compute_type: Optional[str] = None       # 例如 "float16" (cuda) 或 "int8" (cpu)，可留空由代码选择
+    sample_rate: int = 16000
+    beam_size: int = 5
+    task: str = "transcribe"                 # "transcribe" 或 "translate"
+    language: Optional[str] = None           # 例如 "zh", "en"，None 表示自动检测
+
 
 import os
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
-
+import tempfile
+from typing import Any, Dict, Tuple, Union, Optional, List
 import numpy as np
 import soundfile as sf
 
 try:
     from scipy.signal import resample_poly
-except Exception:  # pragma: no cover
-    resample_poly = None  # type: ignore
+except Exception:
+    resample_poly = None
 
-import sherpa_onnx
+from faster_whisper import WhisperModel
 
 
-@dataclass
-class ASRConfig:
-    # Transducer model files from sherpa-onnx export
-    encoder: str
-    decoder: str
-    joiner: str
-    tokens: str
-    provider: str = "cpu"  # cpu
-    num_threads: int = os.cpu_count() or 4
-    sample_rate: int = 16000
-    debug: bool = False
-
+try:
+    import torch
+except Exception:
+    torch = None
 
 class ASREngine:
-    """
-    Cloud ASR using sherpa-onnx OfflineRecognizer on CPU.
-    API:
-      - __init__(config: Dict)
-      - transcribe(audio: str | Tuple[np.ndarray, int], language: Optional[str] = None,
-                   streaming: bool = False, diarization: bool = False) -> Dict
-    Notes:
-      - Input should be mono waveform at config.sample_rate.
-      - If sampling rate mismatch, will resample via scipy.signal.resample_poly.
-    """
+    def __init__(self, config: Union[ASRConfig, Dict[str, Any]]):
+        if isinstance(config, dict):
+            self._cfg = ASRConfig(**config)
+        else:
+            self._cfg = config
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        cfg = ASRConfig(**config)
-        # Threads for ORT and OpenMP
-        os.environ.setdefault("OMP_NUM_THREADS", str(cfg.num_threads))
-        os.environ.setdefault("OPENBLAS_NUM_THREADS", str(cfg.num_threads))
-        os.environ.setdefault("MKL_NUM_THREADS", str(cfg.num_threads))
+        # 选择设备
+        if self._cfg.device:
+            device = self._cfg.device
+        else:
+            device = "cuda" if (torch is not None and torch.cuda.is_available()) else "cpu"
 
-        model_config = sherpa_onnx.OfflineModelConfig(
-            transducer=sherpa_onnx.OfflineTransducerModelConfig(
-                encoder=cfg.encoder,
-                decoder=cfg.decoder,
-                joiner=cfg.joiner,
-            ),
-            tokens=cfg.tokens,
-            provider=cfg.provider,
-            num_threads=cfg.num_threads,
-            debug=cfg.debug,
-        )
-        self._recognizer = sherpa_onnx.OfflineRecognizer(model_config)
-        self._sr = cfg.sample_rate
+        # 选择 compute_type
+        if self._cfg.compute_type:
+            compute_type = self._cfg.compute_type
+        else:
+            compute_type = "float16" if device.startswith("cuda") else "int8"
 
-    def _load_audio(
-        self, audio: Union[str, Tuple[np.ndarray, int]]
-    ) -> Tuple[np.ndarray, int, float]:
+        # 加载模型（若是模型名会自动从 Hugging Face 下载并缓存）
+        try:
+            self._model = WhisperModel(self._cfg.model_name_or_path, device=device, compute_type=compute_type)
+        except Exception as e:
+            raise RuntimeError(f"加载 Whisper 模型失败: {e}")
+
+        self._sr = self._cfg.sample_rate
+        self._beam_size = self._cfg.beam_size
+        self._task = self._cfg.task
+        self._language = self._cfg.language
+
+    def _prepare_audio(self, audio: Union[str, Tuple[np.ndarray, int]]) -> str:
+        """
+        返回一个本地 wav 文件路径（临时文件），采样率为 self._sr。
+        如果输入是路径则直接返回输入路径（仍会验证采样率）。
+        """
         if isinstance(audio, str):
-            wav, sr = sf.read(audio, dtype="float32", always_2d=False)
-            if wav.ndim == 2:
-                wav = wav.mean(axis=1)
+            # 验证文件采样率并重采样（如需）
+            info = sf.info(audio)
+            if info.samplerate != self._sr:
+                if resample_poly is None:
+                    raise RuntimeError("需要 `scipy` 才能重采样：pip install scipy")
+                wav, sr = sf.read(audio, dtype="float32")
+                if wav.ndim == 2:
+                    wav = wav.mean(axis=1)
+                g = np.gcd(sr, self._sr)
+                wav = resample_poly(wav, self._sr // g, sr // g).astype("float32")
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                tmp.close()
+                sf.write(tmp.name, wav, self._sr, subtype="PCM_16")
+                return tmp.name
+            else:
+                return audio
         else:
             wav, sr = audio
             wav = np.asarray(wav, dtype="float32")
             if wav.ndim > 1:
                 wav = wav.mean(axis=-1)
+            if sr != self._sr:
+                if resample_poly is None:
+                    raise RuntimeError("需要 `scipy` 才能重采样：pip install scipy")
+                g = np.gcd(sr, self._sr)
+                wav = resample_poly(wav, self._sr // g, sr // g).astype("float32")
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            tmp.close()
+            sf.write(tmp.name, wav, self._sr, subtype="PCM_16")
+            return tmp.name
 
-        if sr != self._sr:
-            if resample_poly is None:
-                raise RuntimeError(
-                    "Sampling rate mismatch and scipy is not available for resampling."
-                )
-            g = np.gcd(sr, self._sr)
-            up, down = self._sr // g, sr // g
-            wav = resample_poly(wav, up, down).astype("float32")
-            sr = self._sr
+    def transcribe(self, audio: Union[str, Tuple[np.ndarray, int]], language: Optional[str] = None) -> Dict[str, Any]:
+        """
+        返回: { "text": full_text, "segments": [ {start, end, text}, ... ], "lang": detected_or_given }
+        """
+        tmp_path = None
+        try:
+            src_path = self._prepare_audio(audio)
+            if src_path != audio and isinstance(audio, tuple):
+                tmp_path = src_path
+            elif src_path != audio and isinstance(audio, str) and src_path != audio:
+                tmp_path = src_path
 
-        duration = float(len(wav)) / float(sr)
-        return wav, sr, duration
+            lang = language or self._language
 
-    def transcribe(
-        self,
-        audio: Union[str, Tuple[np.ndarray, int]],
-        language: Optional[str] = None,
-        streaming: bool = False,
-        diarization: bool = False,
-    ) -> Dict[str, Any]:
-        wav, sr, duration = self._load_audio(audio)
+            segments, info = self._model.transcribe(
+                src_path,
+                beam_size=self._beam_size,
+                language=lang,
+                task=self._task,
+            )
 
-        stream = self._recognizer.create_stream()
-        stream.accept_waveform(sr, wav)
-        stream.input_finished()
+            texts: List[str] = []
+            segs = []
+            for segment in segments:
+                segs.append({"start": float(segment.start), "end": float(segment.end), "text": segment.text})
+                texts.append(segment.text)
+            full_text = " ".join(texts).strip()
 
-        # Offline single stream decode
-        self._recognizer.decode_stream(stream)
+            return {"text": full_text, "segments": segs, "lang": lang or info.language}
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
 
-        # sherpa-onnx exposes result on stream.result
-        result = getattr(stream, "result", None)
-        text = result.text if result is not None else ""
+import sys
+import json
+from asr import ASRConfig, ASREngine
 
-        segments: List[Dict[str, Any]] = [
-            {"start": 0.0, "end": duration, "text": text}
-        ]
-        out = {"text": text, "segments": segments, "lang": language}
-        return out
+def main():
+    # 指定本地模型路径（请提前把 faster_whisper small 模型放在此目录）
+    model_path = "./models/asr/whisper-small"
 
+    # 要识别的音频文件（示例）
+    audio_path = "tests/sample.wav"
+
+    # 配置：device=None 表示自动检测 cuda/ cpu；如果要强制使用 CPU 请写 "cpu"
+    cfg = ASRConfig(
+        model_name_or_path=model_path,
+        device=None,
+        compute_type=None,   # None 由引擎按 device 自动选择 (cuda -> float16, cpu -> int8)
+        sample_rate=16000,
+        beam_size=5,
+        task="transcribe",
+        language=None
+    )
+
+    try:
+        engine = ASREngine(cfg)
+    except Exception as e:
+        print("加载模型失败:", e, file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        result = engine.transcribe(audio_path)
+    except Exception as e:
+        print("转写失败:", e, file=sys.stderr)
+        sys.exit(2)
+
+    # 打印结果
+    print("模型路径:", model_path)
+    print("识别全文:")
+    print(result.get("text", ""))
+    print("\n分段:")
+    print(json.dumps(result.get("segments", []), ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":
-    import pprint
+    main()
 
-    config = {
-        "encoder": "sherpa-onnx-transducer-2024-06-27-utc-16k-encoder.onnx",
-        "decoder": "sherpa-onnx-transducer-2024-06-27-utc-16k-decoder.onnx",
-        "joiner": "sherpa-onnx-transducer-2024-06-27-utc-16k-joiner.onnx",
-        "tokens": "sherpa-onnx-transducer-2024-06-27-utc-16k-tokens.txt",
-        "provider": "cpu",
-        "num_threads": 4,
-        "sample_rate": 16000,
-        "debug": False,
-    }
-
-    engine = ASREngine(config)
-    audio_file = "test_wavs/0.wav"  # Replace with your audio file path
-    result = engine.transcribe(audio_file)
-    pprint.pprint(result)

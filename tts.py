@@ -1,6 +1,3 @@
-# tts_engine.py
-# Dependencies:
-#   pip install TTS soundfile numpy
 from __future__ import annotations
 
 import os
@@ -15,7 +12,7 @@ from TTS.api import TTS
 
 @dataclass
 class TTSConfig:
-    model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2"
+    model_name: str = "./models/tts/xtts_v2"
     output_dir: str = "outputs"
     sample_rate: int = 22050  # XTTS v2 default
     use_gpu: bool = False  # CPU only on the given server

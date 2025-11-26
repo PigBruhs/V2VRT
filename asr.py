@@ -136,24 +136,31 @@ class ASREngine:
 
 import sys
 import json
-from asr import ASRConfig, ASREngine
 
-def main():
-    # 指定本地模型路径（请提前把 faster_whisper small 模型放在此目录）
-    model_path = "./models/asr/whisper-small"
 
-    # 要识别的音频文件（示例）
-    audio_path = "tests/sample.wav"
+def main() -> None:
+    """简单命令行测试入口：
+    - 使用官方模型名 "small"（faster-whisper 会自动下载并缓存 CTranslate2 模型）
+    - 对一个示例 wav 文件进行转写
+    """
+    # 这里直接使用模型名 "small"，交给 faster-whisper 自己处理缓存和转换
+    model_name_or_path = "small"
 
-    # 配置：device=None 表示自动检测 cuda/ cpu；如果要强制使用 CPU 请写 "cpu"
+    default_audio = os.path.join(".", "test_wavs", "8k.wav")
+    audio_path = default_audio if os.path.isfile(default_audio) else None
+
+    if audio_path is None:
+        print("[ASR] 未找到示例音频文件 test_wavs/0.wav，请自行提供音频路径。", file=sys.stderr)
+        return
+
     cfg = ASRConfig(
-        model_name_or_path=model_path,
-        device=None,
-        compute_type=None,   # None 由引擎按 device 自动选择 (cuda -> float16, cpu -> int8)
+        model_name_or_path=model_name_or_path,
+        device=None,         # 自动检测 cuda/cpu
+        compute_type=None,   # 由 ASREngine 按 device 自动选择
         sample_rate=16000,
         beam_size=5,
         task="transcribe",
-        language=None
+        language=None,
     )
 
     try:
@@ -168,13 +175,12 @@ def main():
         print("转写失败:", e, file=sys.stderr)
         sys.exit(2)
 
-    # 打印结果
-    print("模型路径:", model_path)
+    print("模型路径:", model_name_or_path)
     print("识别全文:")
     print(result.get("text", ""))
     print("\n分段:")
     print(json.dumps(result.get("segments", []), ensure_ascii=False, indent=2))
 
+
 if __name__ == "__main__":
     main()
-

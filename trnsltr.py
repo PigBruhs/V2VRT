@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from pathlib import Path
 
 import ctranslate2
 from transformers import M2M100Tokenizer
@@ -15,6 +16,8 @@ from transformers import M2M100Tokenizer
 class MTConfig:
     ct2_model_path: str  # path to converted CT2 model of facebook/m2m100_418M
     tokenizer_name: str = "facebook/m2m100_418M"
+    tokenizer_path: Optional[str] = None
+    local_files_only: bool = True
     device: str = "cpu"
     compute_type: str = "int8"  # int8 float16 float32
     num_threads: int = os.cpu_count() or 4
@@ -46,7 +49,8 @@ class Translator:
             inter_threads=1,
             intra_threads=cfg.num_threads,
         )
-        self._tokenizer = M2M100Tokenizer.from_pretrained(cfg.tokenizer_name)
+        # 只从本地目录加载 tokenizer，不再回退到远程名称
+        self._tokenizer = self._load_tokenizer(cfg)
         self._beam = cfg.beam_size
         self._max_len = cfg.max_decoding_length
         self._len_penalty = cfg.length_penalty
@@ -82,14 +86,75 @@ class Translator:
         out_text = self._tokenizer.decode(hyp_ids, skip_special_tokens=True)
         return out_text
 
+    def _load_tokenizer(self, cfg: MTConfig) -> M2M100Tokenizer:
+        """
+        只从本地目录加载 tokenizer：
+        - 期望目录中至少包含 vocab.json 和 sentencepiece.bpe.model
+        - 如缺失则抛出明确错误，提示用户补齐文件
+        """
+        local_dir_hint = cfg.tokenizer_path or cfg.ct2_model_path
+        if not local_dir_hint:
+            raise RuntimeError(
+                "Tokenizer 加载失败：未配置本地 tokenizer 路径，也不再回退到远程名称。"
+                "请在 MTConfig 中设置 ct2_model_path/tokenizer_path 指向包含 tokenizer 文件的目录。"
+            )
+
+        local_dir = Path(local_dir_hint).expanduser()
+        if not local_dir.is_dir():
+            raise RuntimeError(f"Tokenizer 加载失败：目录不存在：{local_dir}")
+
+        vocab_file = local_dir / "vocab.json"
+        spm_file = local_dir / "sentencepiece.bpe.model"
+
+        if not vocab_file.exists() or not spm_file.exists():
+            missing = []
+            if not vocab_file.exists():
+                missing.append("vocab.json")
+            if not spm_file.exists():
+                missing.append("sentencepiece.bpe.model")
+            raise RuntimeError(
+                f"Tokenizer 加载失败：目录 {local_dir} 缺少必要文件：{', '.join(missing)}。\n"
+                "请从一台可联网的机器上运行：\n"
+                "  from transformers import M2M100Tokenizer\n"
+                "  tok = M2M100Tokenizer.from_pretrained('facebook/m2m100_418M')\n"
+                "  tok.save_pretrained('<你的本地目录>')"
+            )
+
+        # 本地目录已包含标准 HF tokenizer 文件
+        return M2M100Tokenizer.from_pretrained(
+            str(local_dir),
+            local_files_only=True,
+        )
+
+
+def test_translator() -> None:
+    """
+    简单测试函数：
+    - 构造 Translator
+    - 翻译一条固定英文句子到法文
+    - 打印输入/输出
+    """
+    config = {
+        "ct2_model_path": "./models/nlp/m2m100_418M_int8",
+        # 如有需要，也可以显式给 tokenizer_path
+        # "tokenizer_path": "./models/nlp/m2m100_418M_int8",
+    }
+
+    print("[test] 初始化 Translator ...")
+    translator = Translator(config)
+
+    src_text = "u r a white dog"
+    print(f"[test] 原文: {src_text}")
+    translated_text = translator.translate(src_text, src_lang="en", tgt_lang="fr")
+    print(f"[test] 译文: {translated_text}")
 
 
 if __name__ == "__main__":
-    # Example usage
-    config = {
-        "ct2_model_path": "./models/nlp/m2m100_418M_int8",
-    }
-    translator = Translator(config)
-    src_text = "Hello, how are you?"
-    translated_text = translator.translate(src_text, src_lang="en", tgt_lang="fr")
-    print(translated_text)  # Should print the French translation of the input text
+    try:
+        test_translator()
+    except Exception as e:
+        import traceback
+
+        print("[test] 发生异常：", e)
+        traceback.print_exc()
+        raise

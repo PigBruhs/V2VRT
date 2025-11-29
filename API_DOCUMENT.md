@@ -54,7 +54,13 @@
     "payload": {
         "audio_base64": "UklGRiQ...AA==",
         "source_lang": "en",
-        "target_lang": "fr"
+        "target_lang": "fr",
+        "asr_text": "Hello, how are you?",
+        "asr_lang": "en",
+        "asr_segments": [ ... ],
+        "nlp_text": "Bonjour, comment allez-vous?",
+        "nlp_source_lang": "en",
+        "nlp_target_lang": "fr"
     }
 }
 ```
@@ -63,6 +69,8 @@
     *   如果 `next_action` 是 `"send_audio"`，`payload` 中必须包含 `audio_base64`。
     *   如果 `next_action` 是 `"send_text"`，`payload` 中必须包含 `text`。
     *   `source_lang` 和 `target_lang` 根据具体模式按需提供。
+    *   当 ASR 在前端执行时，`asr_text`（可选配 `asr_lang`、`asr_segments`）为必填，用于后端透传结果。
+    *   当 NLP/翻译在前端执行时，`nlp_text` 及其语言信息需在同一请求体内提供，以便后端在最后一次通信中返回完整结果。
 
 #### **最终响应**
 
@@ -76,6 +84,18 @@
     "results": {
         "text": "Bonjour, comment allez-vous?",
         "audio_base64": "UklGRiQ...AA==",
+        "asr_result": {
+            "text": "Hello, how are you?",
+            "lang": "en",
+            "segments": [ ... ],
+            "provider": "backend"
+        },
+        "nlp_result": {
+            "text": "Bonjour, comment allez-vous?",
+            "source_lang": "en",
+            "target_lang": "fr",
+            "provider": "backend"
+        },
         "meta": { ... }
     }
 }
@@ -91,4 +111,3 @@
     "results": null
 }
 ```
-

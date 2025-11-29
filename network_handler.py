@@ -112,6 +112,12 @@ class NetworkCoordinator:
         payload = request_json.get("payload", {}) or {}
         source_lang: Optional[str] = payload.get("source_lang")
         target_lang: Optional[str] = payload.get("target_lang")
+        frontend_asr_text = payload.get("asr_text")
+        frontend_asr_lang = payload.get("asr_lang")
+        frontend_asr_segments = payload.get("asr_segments")
+        frontend_nlp_text = payload.get("nlp_text")
+        frontend_nlp_source_lang = payload.get("nlp_source_lang")
+        frontend_nlp_target_lang = payload.get("nlp_target_lang")
 
         print(f"流程计划: ASR={'后端' if run_asr else '前端'}, 翻译={'后端' if run_translator else '前端'}, TTS={'后端' if run_tts else '前端'}")
         print(f"语言参数: 源='{source_lang}', 目标='{target_lang}'")
@@ -119,6 +125,8 @@ class NetworkCoordinator:
         timing_ms = {"asr": 0.0, "translator": 0.0, "tts": 0.0}
         current_text = payload.get("text")
         current_audio_b64 = payload.get("audio_base64")
+        asr_result_payload: Dict[str, Any] = {}
+        nlp_result_payload: Dict[str, Any] = {}
 
         if current_audio_b64:
             print("Payload: 收到音频数据 (Base64)")
@@ -136,12 +144,30 @@ class NetworkCoordinator:
                 asr_result = self._asr.transcribe(audio_data, language=source_lang)
                 timing_ms["asr"] = (time.perf_counter() - t0) * 1000.0
                 current_text = asr_result["text"]
-                print(f"<-- ASR 结果: '{current_text}' (耗时: {timing_ms['asr']:.2f}ms)")
+                asr_result_payload = {
+                    "text": current_text,
+                    "lang": source_lang,
+                    "segments": asr_result.get("segments"),
+                    "provider": "backend",
+                }
                 if not source_lang:
                     source_lang = asr_result.get("lang")
             except Exception as e:
                 LOGGER.exception("ASR 模块在模式 %d 中失败", mode)
                 return self._error_response(transaction_id, "ASR_FAILED", f"ASR 模块调用失败: {e}")
+
+        else:
+            if not frontend_asr_text:
+                return self._error_response(transaction_id, "MISSING_ASR_TEXT", f"模式 {mode} 需要 payload.asr_text")
+            current_text = frontend_asr_text
+            if not source_lang and frontend_asr_lang:
+                source_lang = frontend_asr_lang
+            asr_result_payload = {
+                "text": frontend_asr_text,
+                "lang": source_lang or frontend_asr_lang,
+                "segments": frontend_asr_segments,
+                "provider": "frontend",
+            }
 
         if not current_text:
             return self._error_response(transaction_id, "MISSING_TEXT", f"模式 {mode} 在处理流程中未能获得文本")
@@ -156,9 +182,31 @@ class NetworkCoordinator:
                 current_text = self._translator.translate(current_text, src_lang=source_lang, tgt_lang=target_lang)
                 timing_ms["translator"] = (time.perf_counter() - t0) * 1000.0
                 print(f"<-- 翻译结果: '{current_text}' (耗时: {timing_ms['translator']:.2f}ms)")
+                nlp_result_payload = {
+                    "text": current_text,
+                    "source_lang": source_lang,
+                    "target_lang": target_lang,
+                    "provider": "backend",
+                }
             except Exception as e:
                 LOGGER.exception("翻译模块在模式 %d 中失败", mode)
                 return self._error_response(transaction_id, "TRANSLATOR_FAILED", f"翻译模块调用失败: {e}")
+
+        else:
+            chosen_nlp_text = frontend_nlp_text or current_text
+            if not chosen_nlp_text:
+                return self._error_response(transaction_id, "MISSING_NLP_TEXT", f"模式 {mode} 需要 payload.nlp_text")
+            current_text = chosen_nlp_text
+            nlp_source = frontend_nlp_source_lang or source_lang
+            nlp_target = frontend_nlp_target_lang or target_lang
+            if not target_lang and nlp_target:
+                target_lang = nlp_target
+            nlp_result_payload = {
+                "text": current_text,
+                "source_lang": nlp_source,
+                "target_lang": target_lang,
+                "provider": "frontend" if frontend_nlp_text else "passthrough",
+            }
 
         # --- 3. TTS ---
         final_audio_b64: Optional[str] = None
@@ -186,6 +234,8 @@ class NetworkCoordinator:
             "results": {
                 "text": current_text,
                 "audio_base64": final_audio_b64,
+                "asr_result": asr_result_payload,
+                "nlp_result": nlp_result_payload,
                 "meta": {
                     "mode": mode,
                     "timing_ms": {**timing_ms, "total": total_ms},

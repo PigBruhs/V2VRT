@@ -1,15 +1,30 @@
-# translator.py
-# Dependencies:
-#   pip install ctranslate2 transformers sentencepiece
-from __future__ import annotations
-
+import logging
 import os
+import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 import ctranslate2
 from transformers import M2M100Tokenizer
+
+_LOG_DIR = Path("logs")
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _get_pipeline_logger() -> logging.Logger:
+    logger = logging.getLogger("pipeline")
+    if not logger.handlers:
+        handler = logging.FileHandler(_LOG_DIR / "pipeline.log", encoding="utf-8")
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+        )
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+    return logger
+
+
+LOGGER = _get_pipeline_logger()
 
 
 @dataclass
@@ -54,6 +69,7 @@ class Translator:
         self._beam = cfg.beam_size
         self._max_len = cfg.max_decoding_length
         self._len_penalty = cfg.length_penalty
+        LOGGER.info("Translator 初始化完成 | model=%s", cfg.ct2_model_path)
 
     def translate(
         self,
@@ -63,28 +79,47 @@ class Translator:
         domain: Optional[str] = None,
         formality: Optional[str] = None,
     ) -> str:
-        # Prepare source tokens with source language
-        self._tokenizer.src_lang = src_lang
-        src_ids = self._tokenizer(text, return_tensors=None).input_ids  # type: ignore
-        # input_ids is a list of ids; we need tokens for CT2
-        src_tokens = self._tokenizer.convert_ids_to_tokens(src_ids)
+        started = time.perf_counter()
+        try:
+            # Prepare source tokens with source language
+            self._tokenizer.src_lang = src_lang
+            src_ids = self._tokenizer(text, return_tensors=None).input_ids  # type: ignore
+            # input_ids is a list of ids; we need tokens for CT2
+            src_tokens = self._tokenizer.convert_ids_to_tokens(src_ids)
 
-        # Target language prefix token for M2M100
-        tgt_prefix_token = self._tokenizer.get_lang_token(tgt_lang)
-        tgt_prefix = [tgt_prefix_token]
+            # Target language prefix token for M2M100
+            tgt_prefix_token = self._tokenizer.get_lang_token(tgt_lang)
+            tgt_prefix = [tgt_prefix_token]
 
-        result = self._translator.translate_batch(
-            [src_tokens],
-            beam_size=self._beam,
-            max_decoding_length=self._max_len,
-            length_penalty=self._len_penalty,
-            target_prefix=[tgt_prefix],
-        )
+            result = self._translator.translate_batch(
+                [src_tokens],
+                beam_size=self._beam,
+                max_decoding_length=self._max_len,
+                length_penalty=self._len_penalty,
+                target_prefix=[tgt_prefix],
+            )
 
-        hyp_tokens = result[0].hypotheses[0]
-        hyp_ids = self._tokenizer.convert_tokens_to_ids(hyp_tokens)
-        out_text = self._tokenizer.decode(hyp_ids, skip_special_tokens=True)
-        return out_text
+            hyp_tokens = result[0].hypotheses[0]
+            hyp_ids = self._tokenizer.convert_tokens_to_ids(hyp_tokens)
+            out_text = self._tokenizer.decode(hyp_ids, skip_special_tokens=True)
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            LOGGER.info(
+                "Translator.translate success | src=%s | tgt=%s | chars=%d | duration_ms=%.2f",
+                src_lang,
+                tgt_lang,
+                len(out_text),
+                duration_ms,
+            )
+            return out_text
+        except Exception:
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            LOGGER.exception(
+                "Translator.translate failed | src=%s | tgt=%s | duration_ms=%.2f",
+                src_lang,
+                tgt_lang,
+                duration_ms,
+            )
+            raise
 
     def _load_tokenizer(self, cfg: MTConfig) -> M2M100Tokenizer:
         """

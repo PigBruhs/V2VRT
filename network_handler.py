@@ -254,10 +254,10 @@ class NetworkCoordinator:
         error_message: str,
     ) -> Dict[str, Any]:
         """
-        统一错误响应构造.
+        统一错误响应构造：使用 transaction_id 字段以便与 API 文档和前端一致。
         """
         return {
-            "request_id": req_id, # 保持字段名一致
+            "transaction_id": req_id,  # 原先为 request_id，改为 transaction_id
             "status": "error",
             "error_code": error_code,
             "error_message": error_message,

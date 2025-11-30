@@ -1,5 +1,7 @@
 ### **V2VRT API 接口文档 (v3.0)**
 
+说明：在当前工作的“最后一次通信”中，后端响应必定包含 asr_result 与 nlp_result（无论 ASR/NLP 是由前端提供还是由后端生成）。该保证用于前端统一展示与存档最终识别与翻译结果。
+
 本 API 采用两阶段交互模型：**协商** 和 **执行**。
 
 ---
@@ -69,12 +71,12 @@
     *   如果 `next_action` 是 `"send_audio"`，`payload` 中必须包含 `audio_base64`。
     *   如果 `next_action` 是 `"send_text"`，`payload` 中必须包含 `text`。
     *   `source_lang` 和 `target_lang` 根据具体模式按需提供。
-    *   当 ASR 在前端执行时，`asr_text`（可选配 `asr_lang`、`asr_segments`）为必填，用于后端透传结果。
-    *   当 NLP/翻译在前端执行时，`nlp_text` 及其语言信息需在同一请求体内提供，以便后端在最后一次通信中返回完整结果。
+    *   当 ASR 在前端执行时，`asr_text`（可选配 `asr_lang`、`asr_segments`）应提供，用于后端透传并标注 provider。
+    *   当 NLP/翻译在前端执行时，`nlp_text` 及其语言字段应提供，以便后端在最后一次通信中返回完整结果。
 
 #### **最终响应**
 
-响应格式与旧版 `/pipeline` 端点一致，包含处理结果。
+响应格式与旧版 `/pipeline` 端点一致，且在“最后一次通信”中必定包含 asr_result 与 nlp_result 两个对象，便于前端统一展示。
 
 ##### **成功响应 (`status: "ok"`)**
 ```json
@@ -96,12 +98,14 @@
             "target_lang": "fr",
             "provider": "backend"
         },
-        "meta": { ... }
+        "meta": { "mode": 0, "timing_ms": { "asr": 12.3, "translator": 45.6, "tts": 30.1, "total": 88.0 } }
     }
 }
 ```
 
 ##### **失败响应 (`status: "error"`)**
+错误响应中字段名采用 `transaction_id` 以便前端关联事务。
+
 ```json
 {
     "transaction_id": "a1b2c3d4-e5f6-7890-1234-567890abcdef",

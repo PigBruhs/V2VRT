@@ -230,6 +230,137 @@ def scatter_cloud_vs_local(local_totals, cloud_totals, out_path):
     print('Saved', out_path)
 
 
+def compute_stats(entries):
+    """Return simple stats: mean, median, count for a list of numeric durations."""
+    import math
+    vals = [e['duration_ms'] for e in entries if e.get('duration_ms') is not None]
+    if not vals:
+        return {'count': 0, 'mean': None, 'median': None}
+    vals_sorted = sorted(vals)
+    n = len(vals_sorted)
+    mean = sum(vals_sorted) / n
+    median = vals_sorted[n//2] if n % 2 == 1 else (vals_sorted[n//2 - 1] + vals_sorted[n//2]) / 2
+    return {'count': n, 'mean': mean, 'median': median, 'min': vals_sorted[0], 'max': vals_sorted[-1]}
+
+
+def plot_module_mean_bars(agg, out_path):
+    """Grouped bar chart: mean duration per module (cloud vs mobile)."""
+    modules = ['asr', 'translator', 'tts']
+    cloud_means = []
+    mobile_means = []
+    cloud_counts = []
+    mobile_counts = []
+    for m in modules:
+        cloud_list = agg.get((m, 'cloud'), [])
+        mobile_list = agg.get((m, 'mobile'), [])
+        s_c = compute_stats(cloud_list)
+        s_m = compute_stats(mobile_list)
+        cloud_means.append(s_c['mean'] if s_c['mean'] is not None else 0)
+        mobile_means.append(s_m['mean'] if s_m['mean'] is not None else 0)
+        cloud_counts.append(s_c['count'])
+        mobile_counts.append(s_m['count'])
+
+    x = range(len(modules))
+    width = 0.35
+    plt.figure(figsize=(8,4))
+    plt.bar([i - width/2 for i in x], cloud_means, width=width, label='cloud', color='#4C72B0')
+    plt.bar([i + width/2 for i in x], mobile_means, width=width, label='mobile', color='#DD8452')
+    plt.xticks(x, [m.upper() for m in modules])
+    plt.ylabel('mean duration (ms)')
+    plt.title('Mean duration per module (cloud vs mobile)')
+    for i, v in enumerate(cloud_means):
+        if cloud_counts[i]:
+            plt.text(i - width/2, v + max(1, v*0.01), f"{v:.0f}\n(n={cloud_counts[i]})", ha='center', va='bottom', fontsize=8)
+    for i, v in enumerate(mobile_means):
+        if mobile_counts[i]:
+            plt.text(i + width/2, v + max(1, v*0.01), f"{v:.0f}\n(n={mobile_counts[i]})", ha='center', va='bottom', fontsize=8)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+    print('Saved', out_path)
+
+
+def plot_histograms_per_module(agg, out_path):
+    """Overlayed histograms per module comparing cloud vs mobile."""
+    modules = ['asr', 'translator', 'tts']
+    plt.figure(figsize=(10, 6))
+    cols = 2
+    rows = 2
+    idx = 1
+    for m in modules:
+        plt.subplot(rows, cols, idx)
+        c = [e['duration_ms'] for e in agg.get((m, 'cloud'), []) if e.get('duration_ms') is not None]
+        mv = [e['duration_ms'] for e in agg.get((m, 'mobile'), []) if e.get('duration_ms') is not None]
+        if c:
+            plt.hist(c, bins=20, alpha=0.6, label='cloud')
+        if mv:
+            plt.hist(mv, bins=20, alpha=0.6, label='mobile')
+        plt.title(m.upper())
+        plt.xlabel('ms')
+        plt.ylabel('count')
+        plt.legend()
+        idx += 1
+    # empty subplot if any
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+    print('Saved', out_path)
+
+
+def plot_violin_modules(agg, out_path):
+    """Violin plot for each module, combining sources into groups."""
+    modules = ['asr', 'translator', 'tts']
+    data = []
+    labels = []
+    for m in modules:
+        vals = [e['duration_ms'] for e in agg.get((m, 'cloud'), []) if e.get('duration_ms') is not None]
+        vals += [e['duration_ms'] for e in agg.get((m, 'mobile'), []) if e.get('duration_ms') is not None]
+        if vals:
+            data.append(vals)
+            labels.append(m.upper())
+    if not data:
+        print('no data for violin plot')
+        return
+    plt.figure(figsize=(8,4))
+    plt.violinplot(data, showmedians=True)
+    plt.xticks(range(1, len(labels)+1), labels)
+    plt.ylabel('ms')
+    plt.title('Duration distribution per module (combined sources)')
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+    print('Saved', out_path)
+
+
+def plot_tts_by_language(entries, out_path):
+    """Bar chart: mean TTS duration by language (across both sources)."""
+    tts_entries = [e for e in entries if e.get('module') == 'tts' and e.get('lang')]
+    if not tts_entries:
+        print('no tts entries for language plot')
+        return
+    by_lang = defaultdict(list)
+    for e in tts_entries:
+        lang = e.get('lang')
+        by_lang[lang].append(e['duration_ms'])
+    langs = sorted(by_lang.keys())
+    means = [sum(by_lang[l]) / len(by_lang[l]) for l in langs]
+    counts = [len(by_lang[l]) for l in langs]
+    plt.figure(figsize=(max(8, len(langs)*0.6),4))
+    x = range(len(langs))
+    plt.bar(x, means, color='#4C72B0')
+    plt.xticks(x, langs)
+    plt.ylabel('mean duration (ms)')
+    plt.title('TTS mean duration by language')
+    for i, v in enumerate(means):
+        plt.text(i, v + max(1, v*0.01), f"{v:.0f}\n(n={counts[i]})", ha='center', va='bottom', fontsize=8)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+    print('Saved', out_path)
+
+
 def main():
     pipeline_entries = parse_log_file(LOG_PIPELINE, 'cloud')
     app_entries = parse_log_file(LOG_APP, 'mobile')
@@ -264,6 +395,12 @@ def main():
     local_totals = [e for e in entries if e.get('module') == 'local_pipeline_total']
     cloud_totals = [e for e in entries if e.get('module') == 'cloud_pipeline_total']
     scatter_cloud_vs_local(local_totals, cloud_totals, os.path.join(OUT_DIR, 'local_vs_cloud_scatter.png'))
+
+    # NEW: Additional helpful plots
+    plot_module_mean_bars(agg, os.path.join(OUT_DIR, 'module_mean_bars.png'))
+    plot_histograms_per_module(agg, os.path.join(OUT_DIR, 'module_histograms.png'))
+    plot_violin_modules(agg, os.path.join(OUT_DIR, 'module_violins.png'))
+    plot_tts_by_language(entries, os.path.join(OUT_DIR, 'tts_by_language.png'))
 
     print('Done. Plots written to', OUT_DIR)
 
